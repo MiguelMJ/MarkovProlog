@@ -5,17 +5,45 @@
 :- use_module(library(dicts)).
 :- use_module(library(readutil)).
 
-word_follows(F, S, [], [cons(F, [S])]).
-word_follows(F, S, [cons(F, WL) | L], [cons(F, [S|WL]) | L]) :- !.
-word_follows(F, S, [H|Rest], [H|X]) :- word_follows(F, S, Rest, X).
 
-consecutive_list([], X, X).
-consecutive_list([_], X, X).
-consecutive_list([Prev, Curr |L], N, M) :-
-    word_follows(Prev, Curr, N, N2),
-    consecutive_list([Curr | L], N2, M)
+join(_,[], []) :- !.
+join(_, [R], R) :- !.
+join(Sep, [H1,H2|T], Res) :-
+    string_concat(H1,Sep,Hs),
+    string_concat(Hs,H2,HsH),
+    join(Sep, [HsH|T], Res)
+    .
+    
+make_key(Ws,Key) :- 
+    join("..", Ws, Str),
+    atom_string(Key,Str).
+
+word_follows(Ws, PairList, X) :- 
+    append(W1, [W2], Ws),
+    make_key(W1, K),
+    append(PairList, [K-W2], X)
+    % X = Dict.put(K, W2)
     .
 
+divide_list(0, List, [], List).
+divide_list(N,[H|T1],[H|T2], Rest) :- succ(N1,N), divide_list(N1, T1, T2, Rest).
+
+consecutive_list(Level, Words, X, Y) :- 
+    length(Words, N), 
+    N =< Level,
+    keysort(X, X2),
+    group_pairs_by_key(X2,Y),
+    !
+    .
+consecutive_list(Level, [H|T], N, M) :-
+    succ(Level, S),
+    divide_list(S, [H|T], Head,_),
+    word_follows(Head, N, N2),
+    consecutive_list(Level, T, N2, M)
+    .
+
+consecutive_list(Level, Words, Result) :- consecutive_list(Level, Words, [], Result).
+    
 grab([], _, [], []).
 grab([H|L], H, [H|X], Y) :- grab(L, H, X, Y), !.
 grab([H|L], E, X, [H|Y]) :- grab(L, E, X, Y).
@@ -33,10 +61,10 @@ freq(A, B) :-
     length(A, F),
     freq(A, B, F).
    
-cons_freq(cons(F, WL), prcons(F, P)) :- freq(WL, P).
+cons_freq(F-WL, F-P) :- freq(WL, P).
 
-matrix_from_words(Words, Matrix) :-
-    consecutive_list(Words, [], M),
+markov(Level, Words, Matrix) :-
+    consecutive_list(Level, Words, M),
     maplist(cons_freq, M, Matrix)
     .
 
@@ -49,11 +77,12 @@ roulette(Probs, Word) :-
     roulette(Probs, Word, X)
     .
     
-gen_next_word([prcons(Prev, Probs)|_], Prev, Next) :-
+gen_next_word(Markov, Head, Next) :-
+    make_key(Head, Key),
+    member(Key-Probs, Markov),
     roulette(Probs, Next),
     !
     .
-gen_next_word([_|T], Prev, Next) :- gen_next_word(T, Prev, Next).
 
 process_match(Match, V0, V1) :-
     get_dict(0, Match, X),
@@ -62,17 +91,19 @@ process_match(Match, V0, V1) :-
     .
 
 text_to_list(Text, List):-
-    % re_foldl(process_match, "(\\w+)|([^\\w\\s]+)", Text, [], List, [])
-    re_foldl(process_match, "(\\w+)|([,.;:?!]+)", Text, [], List, [])
+    re_compile("(\\w+)|([,.;:?!¡¿]+)", Re, [ucp(true)]),
+    re_foldl(process_match, Re, Text, [], List, [])
     .
 
 
-produce(Matrix, Result, First, Acc) :-
-    gen_next_word(Matrix, First, Next),
+produce(Matrix, Result, [H|T], Acc) :-
+    %trace,
+    gen_next_word(Matrix, [H|T], Next),
     (
         Next \= ".",
         append(Acc,[Next],Acc2),
-        produce(Matrix, Result, Next, Acc2)
+        append(T, [Next], NextHead),
+        produce(Matrix, Result, NextHead, Acc2)
     );
     (
         Next = ".",
@@ -80,19 +111,22 @@ produce(Matrix, Result, First, Acc) :-
     )
     .
     
-join_word(W, Acc, Res) :-
-    string_concat(W, " ", W2),
-    string_concat(Acc, W2, Res)
+make_guards(N, List, String):-
+    length(List, N),
+    maplist([_,X]>>(X=":::::"), _, List),
+    foldl([E,X,Y]>>(string_concat(E," ",Es), string_concat(Es,X,Y)), List, "", String)
     .
-    
+
 main():-
+    Level = 2,
     read_file_to_string('test.md', TextPre, []),
-    string_concat(":::::::::: ", TextPre, Text),
+    make_guards(Level, GList, GStr),
+    string_concat(GStr, TextPre, Text),
     text_to_list(Text, List),
-    matrix_from_words(List, Matrix),
+    markov(Level, List, Matrix),
     %trace,
-    produce(Matrix, Result, "::::::::::", []),
-    foldl(join_word, Result, "", W),
+    produce(Matrix, Result, GList, []),
+    join(" ", Result, W),
     print(W),
     !
     .
