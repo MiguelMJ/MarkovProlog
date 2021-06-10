@@ -2,47 +2,58 @@
 :- use_module(library(apply)).
 :- use_module(library(random)).
 :- use_module(library(pcre)).
-:- use_module(library(dicts)).
-:- use_module(library(readutil)).
 
+corpus("corpus").
+level(1).
+guard(":::::").
 
-join(_,[], []) :- !.
-join(_, [R], R) :- !.
-join(Sep, [H1,H2|T], Res) :-
-    string_concat(H1,Sep,Hs),
-    string_concat(Hs,H2,HsH),
-    join(Sep, [HsH|T], Res)
+join_list(Sep, L, J) :-
+    length(L,X), 
+    X < 2,
+    J = L,
+    !;
+    L = [A,B|T],
+    J = [A,Sep|X],
+    join_list(Sep, [B|T], X)
+    .
+    
+join(Sep, Words, Result):-
+    maplist(string_codes, [Sep|Words], [SepCode|Codes]),
+    join_list(SepCode, Codes, Codes2),
+    flatten(Codes2,Pre),
+    string_codes(Result,Pre)
     .
     
 make_key(Ws,Key) :- 
     join("..", Ws, Str),
     atom_string(Key,Str).
-
-word_follows(Ws, PairList, X) :- 
-    append(W1, [W2], Ws),
+    
+word_follows(Ws, PairList, X) :-
+    last(Ws,W2),
+    findall(W1, append(W1, [W2], Ws), [W1]),
     make_key(W1, K),
     append(PairList, [K-W2], X)
-    % X = Dict.put(K, W2)
     .
 
-divide_list(0, List, [], List).
-divide_list(N,[H|T1],[H|T2], Rest) :- succ(N1,N), divide_list(N1, T1, T2, Rest).
-
+consecutive_list(Level, Words, Result) :- 
+    consecutive_list(Level, Words, [], Result)
+    .
 consecutive_list(Level, Words, X, Y) :- 
     length(Words, N), 
     N =< Level,
     keysort(X, X2),
-    group_pairs_by_key(X2,Y),
-    !
+    group_pairs_by_key(X2,Y)
     .
-consecutive_list(Level, [H|T], N, M) :-
+consecutive_list(Level, L, N, M) :-
+    prolog_current_frame(F), format('~d~n',[F]),
+    L = [_|T],
     succ(Level, S),
-    divide_list(S, [H|T], Head,_),
+    length(Head, S),
+    append(Head, _, L),
     word_follows(Head, N, N2),
     consecutive_list(Level, T, N2, M)
     .
 
-consecutive_list(Level, Words, Result) :- consecutive_list(Level, Words, [], Result).
     
 grab([], _, [], []).
 grab([H|L], H, [H|X], Y) :- grab(L, H, X, Y), !.
@@ -81,6 +92,7 @@ gen_next_word(Markov, Head, Next) :-
     make_key(Head, Key),
     member(Key-Probs, Markov),
     roulette(Probs, Next),
+    \+ guard(Next),
     !
     .
 
@@ -91,7 +103,7 @@ process_match(Match, V0, V1) :-
     .
 
 text_to_list(Text, List):-
-    re_compile("(\\w+)|([,.;:?!¡¿]+)", Re, [ucp(true)]),
+    re_compile("([^\\W_]+)|([,.;:?!¡¿]+)", Re, [ucp(true)]),
     re_foldl(process_match, Re, Text, [], List, [])
     .
 
@@ -113,19 +125,38 @@ produce(Matrix, Result, [H|T], Acc) :-
     
 make_guards(N, List, String):-
     length(List, N),
-    maplist([_,X]>>(X=":::::"), _, List),
-    foldl([E,X,Y]>>(string_concat(E," ",Es), string_concat(Es,X,Y)), List, "", String)
+    maplist(guard, List),
+    join(" ", List, String)
     .
 
-main():-
-    Level = 2,
-    read_file_to_string('test.md', TextPre, []),
-    make_guards(Level, GList, GStr),
-    string_concat(GStr, TextPre, Text),
-    text_to_list(Text, List),
-    markov(Level, List, Matrix),
+text_from_corpus(Text) :-
     %trace,
-    produce(Matrix, Result, GList, []),
+    level(Level),
+    corpus(Corpus),
+    string_concat(Corpus, "/*",Path),
+    expand_file_name(Path,Files),
+    %maplist([X,Y]>>(corpus(C),join("/",[C,X], Y)),FilesAt,Files),
+    make_guards(Level, _, Guards),
+    %trace,
+    %maplist([File,Body]>>(level(L),make_guards(L,_,Guards),read_file_to_string(File,Pre,[]), string_concat(Guards,Pre,Body)), Files, Texts),
+    maplist([File,Body]>>(read_file_to_string(File,Body,[])), Files, Texts),
+    join(Guards,[" "," "], SGuardsS),
+    join(SGuardsS, [""|Texts], Text)
+    .
+    
+main() :-
+    level(Level),
+    %read_file_to_string('test.md', TextPre, []),
+    make_guards(Level, GList, _),
+    %string_concat(GStr, TextPre, Text),
+    text_from_corpus(Text),
+    text_to_list(Text, List),
+    length(List, WC),
+    format('Building Markov chain from ~d words~n', [WC]),
+    markov(Level, List, Markov),
+    length(Markov, Nstates),
+    format('Word count: ~d, Level ~d: ~d states~n', [WC, Level, Nstates]),
+    produce(Markov, Result, GList, []),
     join(" ", Result, W),
     print(W),
     !
